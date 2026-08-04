@@ -2,10 +2,11 @@ import math
 import time
 import collections
 from typing import List, Tuple, Optional
+import cairo
 import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
-from gi.repository import Gtk, Gdk, Adw, cairo
+from gi.repository import Gtk, Gdk, Adw
 
 # Preset Standard Color Palettes
 COLOR_CPU = [(0.208, 0.518, 0.894)] # GNOME Blue #3584e4
