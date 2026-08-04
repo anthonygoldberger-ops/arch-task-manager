@@ -4,7 +4,7 @@ gi.require_version('Adw', '1')
 from gi.repository import Gtk, Adw, GLib
 from typing import List, Dict
 
-from .graph_widget import RollingGraphWidget
+from .graph_widget import RollingGraphWidget, COLOR_CPU, COLOR_MEMORY, COLOR_DISK, COLOR_NET
 from ..monitors.cpu_monitor import CpuMonitor, CpuSystemStats
 from ..monitors.memory_monitor import MemoryMonitor, MemoryStats
 from ..monitors.gpu_monitor import GpuMonitor, GpuStats
@@ -14,7 +14,7 @@ from ..monitors.power_monitor import PowerMonitor, BatteryStats, SensorGroup
 from .process_view import format_bytes
 
 class PerformanceView(Gtk.ScrolledWindow):
-    """Performance tab displaying live hardware statistics and rolling history graphs."""
+    """Performance tab displaying live hardware statistics and rolling history vector graphs."""
     def __init__(self, main_window: Gtk.Window):
         super().__init__(vexpand=True)
         self.main_window = main_window
@@ -41,7 +41,7 @@ class PerformanceView(Gtk.ScrolledWindow):
         cpu_group = Adw.PreferencesGroup(title="Processor (CPU)", description="Per-core usage, frequency, load averages and thermals")
         cpu_clamp.set_child(cpu_group)
 
-        self.cpu_graph = RollingGraphWidget(max_points=60, title="CPU Total Usage (%)", unit_suffix="%")
+        self.cpu_graph = RollingGraphWidget(max_points=60, colors=COLOR_CPU, title="CPU Total Usage (%)", unit_suffix="%")
         self.cpu_graph.set_content_height(140)
         cpu_group.add(self.cpu_graph)
 
@@ -51,6 +51,19 @@ class PerformanceView(Gtk.ScrolledWindow):
         self.cpu_detail_row = Adw.ActionRow(title="Status", subtitle="Loading cores...")
         cpu_group.add(self.cpu_detail_row)
 
+        # Per-Core CPU Expander Grid
+        self.core_expander = Gtk.Expander(label="Per-Core CPU Usage Breakdown")
+        cpu_group.add(self.core_expander)
+
+        self.core_grid = Gtk.GridView()
+        self.core_box = Gtk.FlowBox(max_children_per_line=4, selection_mode=Gtk.SelectionMode.NONE)
+        self.core_box.set_margin_start(8)
+        self.core_box.set_margin_end(8)
+        self.core_box.set_margin_top(8)
+        self.core_box.set_margin_bottom(8)
+        self.core_expander.set_child(self.core_box)
+        self.core_graphs: List[RollingGraphWidget] = []
+
         # 2. Memory Section
         mem_clamp = Adw.Clamp(maximum_size=1000)
         main_box.append(mem_clamp)
@@ -58,7 +71,7 @@ class PerformanceView(Gtk.ScrolledWindow):
         mem_group = Adw.PreferencesGroup(title="System Memory (RAM)", description="Used, free, cached memory and swap allocation")
         mem_clamp.set_child(mem_group)
 
-        self.mem_graph = RollingGraphWidget(max_points=60, title="RAM Usage (%)", unit_suffix="%")
+        self.mem_graph = RollingGraphWidget(max_points=60, colors=COLOR_MEMORY, title="RAM Usage (%)", unit_suffix="%")
         self.mem_graph.set_content_height(140)
         mem_group.add(self.mem_graph)
 
@@ -72,7 +85,7 @@ class PerformanceView(Gtk.ScrolledWindow):
         self.gpu_group = Adw.PreferencesGroup(title="Graphics Processing Unit (GPU)", description="GPU core load and VRAM metrics")
         gpu_clamp.set_child(self.gpu_group)
 
-        self.gpu_graph = RollingGraphWidget(max_points=60, title="GPU Usage (%)", unit_suffix="%")
+        self.gpu_graph = RollingGraphWidget(max_points=60, colors=COLOR_CPU, title="GPU Usage (%)", unit_suffix="%")
         self.gpu_graph.set_content_height(140)
         self.gpu_group.add(self.gpu_graph)
 
@@ -83,10 +96,16 @@ class PerformanceView(Gtk.ScrolledWindow):
         disk_clamp = Adw.Clamp(maximum_size=1000)
         main_box.append(disk_clamp)
 
-        self.disk_group = Adw.PreferencesGroup(title="Storage (Disks)", description="Read/Write throughput rates and filesystem partitions")
+        self.disk_group = Adw.PreferencesGroup(title="Storage (Disks)", description="Read (Green) / Write (Orange) throughput rates")
         disk_clamp.set_child(self.disk_group)
 
-        self.disk_graph = RollingGraphWidget(max_points=60, title="Disk I/O Rate", unit_suffix=" B/s", auto_scale=True)
+        self.disk_graph = RollingGraphWidget(
+            max_points=60,
+            colors=COLOR_DISK,
+            title="Disk I/O Throughput (Read / Write)",
+            unit_suffix=" B/s",
+            auto_scale=True
+        )
         self.disk_graph.set_content_height(140)
         self.disk_group.add(self.disk_graph)
 
@@ -97,15 +116,15 @@ class PerformanceView(Gtk.ScrolledWindow):
         net_clamp = Adw.Clamp(maximum_size=1000)
         main_box.append(net_clamp)
 
-        net_group = Adw.PreferencesGroup(title="Network Interfaces", description="Upload/Download throughput and transfer totals")
+        net_group = Adw.PreferencesGroup(title="Network Interfaces", description="Download (Teal) / Upload (Pink) throughput rates")
         net_clamp.set_child(net_group)
 
         self.net_graph = RollingGraphWidget(
             max_points=60,
-            title="Network Throughput (Rx / Tx)",
+            colors=COLOR_NET,
+            title="Network Throughput (Download / Upload)",
             unit_suffix=" B/s",
-            auto_scale=True,
-            colors=[(0.1, 0.8, 0.4), (0.9, 0.3, 0.2)]
+            auto_scale=True
         )
         self.net_graph.set_content_height(140)
         net_group.add(self.net_graph)
@@ -148,6 +167,27 @@ class PerformanceView(Gtk.ScrolledWindow):
         temp_str = f"Temp: {cpu.temperature_c:.1f} °C" if cpu.temperature_c > 0 else ""
         self.cpu_detail_row.set_subtitle(f"{temp_str} | {load_str} | {freq_str}")
 
+        # Update per-core graphs dynamically
+        if len(self.core_graphs) != len(cpu.cores):
+            # Rebuild core widgets
+            child = self.core_box.get_first_child()
+            while child:
+                next_c = child.get_next_sibling()
+                self.core_box.remove(child)
+                child = next_c
+            self.core_graphs.clear()
+
+            for c in cpu.cores:
+                c_graph = RollingGraphWidget(max_points=30, colors=COLOR_CPU, title=f"Core #{c.core_id}", unit_suffix="%")
+                c_graph.set_content_height(75)
+                c_graph.set_size_request(180, 75)
+                self.core_box.append(c_graph)
+                self.core_graphs.append(c_graph)
+
+        for idx, c in enumerate(cpu.cores):
+            if idx < len(self.core_graphs):
+                self.core_graphs[idx].add_point(c.usage_percent)
+
         # 2. Update Memory
         mem = self.mem_mon.update()
         self.mem_graph.add_point(mem.used_percent)
@@ -173,7 +213,7 @@ class PerformanceView(Gtk.ScrolledWindow):
         drives = self.disk_mon.update()
         total_r = sum(d.read_bytes_sec for d in drives)
         total_w = sum(d.write_bytes_sec for d in drives)
-        self.disk_graph.add_point(total_r + total_w)
+        self.disk_graph.add_multi_points([total_r, total_w])
 
         # Rebuild drive rows
         child = self.disk_info_box.get_first_child()
