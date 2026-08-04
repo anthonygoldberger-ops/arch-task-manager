@@ -35,11 +35,11 @@ def format_graph_value(val: float, unit_suffix: str, auto_scale: bool) -> str:
 class RollingGraphWidget(Gtk.DrawingArea):
     """
     High-performance GTK4 Cairo DrawingArea rendering smooth anti-aliased Bezier vector graphs
-    with subtle gradient fills, theme awareness, and interactive hover tooltips.
+    displaying exactly the last 10 data intervals (capped ring buffer) redrawn in-place.
     """
     def __init__(
         self,
-        max_points: int = 60,
+        max_points: int = 10,
         colors: Optional[List[Tuple[float, float, float]]] = None,
         title: str = "",
         unit_suffix: str = "%",
@@ -53,9 +53,9 @@ class RollingGraphWidget(Gtk.DrawingArea):
 
         self.colors = colors or COLOR_CPU
 
-        # Data structure: List of (deque of values, deque of timestamps)
-        self.series_data: List[collections.deque] = [collections.deque(maxlen=max_points)]
-        self.series_timestamps: List[collections.deque] = [collections.deque(maxlen=max_points)]
+        # Capped fixed-size ring buffers for values and timestamps (strictly max_points=10)
+        self.series_data: List[collections.deque] = [collections.deque(maxlen=self.max_points)]
+        self.series_timestamps: List[collections.deque] = [collections.deque(maxlen=self.max_points)]
 
         # Interactive Hover state
         self.mouse_x: Optional[float] = None
@@ -71,7 +71,7 @@ class RollingGraphWidget(Gtk.DrawingArea):
         self.add_controller(motion_ctrl)
 
     def add_point(self, value: float, series_index: int = 0, timestamp: Optional[float] = None):
-        """Appends a new data sample with timestamp and updates drawing area immediately."""
+        """Appends a new sample to capped ring buffer (max 10 entries) and redraws in-place."""
         now = timestamp or time.time()
         while len(self.series_data) <= series_index:
             self.series_data.append(collections.deque(maxlen=self.max_points))
@@ -124,6 +124,7 @@ class RollingGraphWidget(Gtk.DrawingArea):
     def _compute_smooth_bezier_path(self, points: List[Tuple[float, float]]) -> List[Tuple[str, List[float]]]:
         """
         Generates smooth cubic Bezier curve commands (move_to, curve_to) using Catmull-Rom / Spline interpolation.
+        Safe for 0, 1, 2, or up to 10 points.
         """
         if not points:
             return []
@@ -144,7 +145,6 @@ class RollingGraphWidget(Gtk.DrawingArea):
             p2 = points[i + 1]
             p3 = points[min(n - 1, i + 2)]
 
-            # Control points calculated using Catmull-Rom to Bezier conversion (smoothness = 0.2)
             tension = 0.2
             cp1_x = p1[0] + (p2[0] - p0[0]) * tension
             cp1_y = p1[1] + (p2[1] - p0[1]) * tension
@@ -219,7 +219,7 @@ class RollingGraphWidget(Gtk.DrawingArea):
             cr.move_to(width - margin_right, 18)
             cr.show_text(latest_str)
 
-        # 5. Render Smooth Bezier Vector Lines & Fading Gradient Fills
+        # 5. Render Last 10 Static Interval Slots (No Sliding)
         step_x = plot_w / max(1, self.max_points - 1)
 
         hover_closest_idx = None
@@ -231,14 +231,12 @@ class RollingGraphWidget(Gtk.DrawingArea):
 
             r, g, b = self.colors[s_idx % len(self.colors)]
 
-            # Convert data points to screen coordinates
+            # Map up to 10 points directly to fixed slot positions (0 to 9)
             screen_pts: List[Tuple[float, float]] = []
-            num_pts = len(deque_data)
 
             for i, val in enumerate(deque_data):
-                x = margin_left + (i - (self.max_points - num_pts)) * step_x
-                x = max(margin_left, min(margin_left + plot_w, x))
-                
+                # Static slot position x_i
+                x = margin_left + i * step_x
                 clamped_val = max(0.0, min(max_val, val))
                 y = margin_top + plot_h - (clamped_val / max_val) * plot_h
                 screen_pts.append((x, y))
@@ -273,19 +271,26 @@ class RollingGraphWidget(Gtk.DrawingArea):
                 cr.close_path()
 
                 grad = cairo.LinearGradient(0, margin_top, 0, margin_top + plot_h)
-                grad.add_color_stop_rgba(0.0, r, g, b, 0.38) # Peak opacity
+                grad.add_color_stop_rgba(0.0, r, g, b, 0.38)
                 grad.add_color_stop_rgba(0.7, r, g, b, 0.10)
-                grad.add_color_stop_rgba(1.0, r, g, b, 0.00) # Completely transparent at bottom
+                grad.add_color_stop_rgba(1.0, r, g, b, 0.00)
 
                 cr.set_source(grad)
                 cr.fill()
 
-            # Stroke Bezier Line
+            # Stroke Bezier Line (or single node point if N=1)
             cr.new_path()
             cr.append_path(fill_path)
             cr.set_source_rgba(r, g, b, 0.95)
             cr.set_line_width(2.0)
             cr.stroke()
+
+            # Draw highlighted node dots for small point counts N=1 or N=2
+            if len(screen_pts) <= 2:
+                for px, py in screen_pts:
+                    cr.set_source_rgb(r, g, b)
+                    cr.arc(px, py, 3.5, 0, 2 * math.pi)
+                    cr.fill()
 
         # 6. Plot Area Border
         cr.set_source_rgba(*grid_rgb, border_alpha)
@@ -305,7 +310,7 @@ class RollingGraphWidget(Gtk.DrawingArea):
                 cr.move_to(px, margin_top)
                 cr.line_to(px, margin_top + plot_h)
                 cr.stroke()
-                cr.set_dash([]) # Reset dash
+                cr.set_dash([])
 
                 # Highlight Data Node Circle
                 hr, hg, hb = self.colors[s_idx % len(self.colors)]

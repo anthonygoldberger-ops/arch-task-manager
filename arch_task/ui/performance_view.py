@@ -14,7 +14,7 @@ from ..monitors.power_monitor import PowerMonitor, BatteryStats, SensorGroup
 from .process_view import format_bytes
 
 class PerformanceView(Gtk.ScrolledWindow):
-    """Performance tab displaying live hardware statistics, temperature graphs, and rolling history vector graphs."""
+    """Performance tab displaying live hardware statistics, temperature graphs, and 10-interval rolling history vector graphs."""
     def __init__(self, main_window: Gtk.Window):
         super().__init__(vexpand=True)
         self.main_window = main_window
@@ -41,12 +41,12 @@ class PerformanceView(Gtk.ScrolledWindow):
         cpu_group = Adw.PreferencesGroup(title="Processor (CPU)", description="Per-core usage, frequency, load averages and thermals")
         cpu_clamp.set_child(cpu_group)
 
-        self.cpu_graph = RollingGraphWidget(max_points=60, colors=COLOR_CPU, title="CPU Total Usage (%)", unit_suffix="%")
+        self.cpu_graph = RollingGraphWidget(max_points=10, colors=COLOR_CPU, title="CPU Total Usage (%)", unit_suffix="%")
         self.cpu_graph.set_content_height(140)
         cpu_group.add(self.cpu_graph)
 
-        # Temperature History Vector Graph
-        self.temp_graph = RollingGraphWidget(max_points=60, colors=COLOR_TEMP, title="CPU Package Temperature (°C)", unit_suffix=" °C")
+        # Temperature History Vector Graph (Last 10 intervals)
+        self.temp_graph = RollingGraphWidget(max_points=10, colors=COLOR_TEMP, title="CPU Package Temperature (°C)", unit_suffix=" °C", auto_scale=True)
         self.temp_graph.set_content_height(140)
         cpu_group.add(self.temp_graph)
 
@@ -75,7 +75,7 @@ class PerformanceView(Gtk.ScrolledWindow):
         mem_group = Adw.PreferencesGroup(title="System Memory (RAM)", description="Used, free, cached memory and swap allocation")
         mem_clamp.set_child(mem_group)
 
-        self.mem_graph = RollingGraphWidget(max_points=60, colors=COLOR_MEMORY, title="RAM Usage (%)", unit_suffix="%")
+        self.mem_graph = RollingGraphWidget(max_points=10, colors=COLOR_MEMORY, title="RAM Usage (%)", unit_suffix="%")
         self.mem_graph.set_content_height(140)
         mem_group.add(self.mem_graph)
 
@@ -89,7 +89,7 @@ class PerformanceView(Gtk.ScrolledWindow):
         self.gpu_group = Adw.PreferencesGroup(title="Graphics Processing Unit (GPU)", description="GPU core load and VRAM metrics")
         gpu_clamp.set_child(self.gpu_group)
 
-        self.gpu_graph = RollingGraphWidget(max_points=60, colors=COLOR_CPU, title="GPU Usage (%)", unit_suffix="%")
+        self.gpu_graph = RollingGraphWidget(max_points=10, colors=COLOR_CPU, title="GPU Usage (%)", unit_suffix="%")
         self.gpu_graph.set_content_height(140)
         self.gpu_group.add(self.gpu_graph)
 
@@ -104,7 +104,7 @@ class PerformanceView(Gtk.ScrolledWindow):
         disk_clamp.set_child(self.disk_group)
 
         self.disk_graph = RollingGraphWidget(
-            max_points=60,
+            max_points=10,
             colors=COLOR_DISK,
             title="Disk I/O Throughput (Read / Write)",
             unit_suffix=" B/s",
@@ -124,7 +124,7 @@ class PerformanceView(Gtk.ScrolledWindow):
         net_clamp.set_child(net_group)
 
         self.net_graph = RollingGraphWidget(
-            max_points=60,
+            max_points=10,
             colors=COLOR_NET,
             title="Network Throughput (Download / Upload)",
             unit_suffix=" B/s",
@@ -172,7 +172,7 @@ class PerformanceView(Gtk.ScrolledWindow):
         temp_str = f"Temp: {cpu.temperature_c:.1f} °C" if cpu.temperature_c > 0 else ""
         self.cpu_detail_row.set_subtitle(f"{temp_str} | {load_str} | {freq_str}")
 
-        # Update per-core graphs dynamically
+        # Update per-core graphs dynamically (capped at 10 points)
         if len(self.core_graphs) != len(cpu.cores):
             child = self.core_box.get_first_child()
             while child:
@@ -182,7 +182,7 @@ class PerformanceView(Gtk.ScrolledWindow):
             self.core_graphs.clear()
 
             for c in cpu.cores:
-                c_graph = RollingGraphWidget(max_points=30, colors=COLOR_CPU, title=f"Core #{c.core_id}", unit_suffix="%")
+                c_graph = RollingGraphWidget(max_points=10, colors=COLOR_CPU, title=f"Core #{c.core_id}", unit_suffix="%")
                 c_graph.set_content_height(75)
                 c_graph.set_size_request(180, 75)
                 self.core_box.append(c_graph)
