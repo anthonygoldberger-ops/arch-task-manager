@@ -27,12 +27,14 @@ _ICON_CACHE: Dict[str, str] = {}
 
 def get_process_icon_name(proc_name: str, cmdline: str = "") -> str:
     """Resolves matching GTK system theme icon for a process name or command line."""
-    clean_name = proc_name.strip().lower()
+    # Clean tree view symbols, dashes, vertical lines, and spaces
+    clean_name = proc_name.strip()
+    for char in ["└", "─", "│", "├", " "]:
+        clean_name = clean_name.replace(char, "")
+    clean_name = clean_name.lower()
 
-    # Strip tree prefixes if tree view is enabled
-    for prefix in ["└─ ", "  "]:
-        while clean_name.startswith(prefix):
-            clean_name = clean_name[len(prefix):].strip()
+    if not clean_name:
+        clean_name = "application-x-executable"
 
     if clean_name in _ICON_CACHE:
         return _ICON_CACHE[clean_name]
@@ -54,7 +56,7 @@ def get_process_icon_name(proc_name: str, cmdline: str = "") -> str:
         "gimp": "gimp",
         "steam": "steam",
         "discord": "discord",
-        "telegram-desktop": "telegram",
+        "telegram": "telegram",
         "spotify": "spotify",
         "bash": "utilities-terminal-symbolic",
         "zsh": "utilities-terminal-symbolic",
@@ -63,7 +65,7 @@ def get_process_icon_name(proc_name: str, cmdline: str = "") -> str:
         "python3": "python-symbolic",
         "git": "git-symbolic",
         "systemd": "system-component-application-symbolic",
-        "dbus-daemon": "system-component-application-symbolic",
+        "dbus": "system-component-application-symbolic",
         "polkitd": "dialog-password-symbolic",
         "pipewire": "audio-speakers-symbolic",
         "pulseaudio": "audio-speakers-symbolic",
@@ -191,7 +193,7 @@ class ProcessView(Gtk.Box):
     def _create_columns(self):
         cols = [
             ("PID", lambda p: str(p.pid), lambda p: p.pid, False),
-            ("Process Name", lambda p: p.name, lambda p: p.name.lower(), True), # Has icon!
+            ("Process Name", lambda p: p.name, lambda p: p.name.lower(), True), # Has app icon!
             ("User", lambda p: p.user, lambda p: p.user, False),
             ("CPU %", lambda p: f"{p.cpu_percent:.1f}%", lambda p: p.cpu_percent, False),
             ("RAM (RSS)", lambda p: format_bytes(p.rss_bytes), lambda p: p.rss_bytes, False),
@@ -249,7 +251,9 @@ class ProcessView(Gtk.Box):
         box.set_margin_start(6)
         box.set_margin_end(6)
 
-        img = Gtk.Image(pixel_size=16)
+        img = Gtk.Image.new_from_icon_name("application-x-executable")
+        img.set_pixel_size(16)
+        img.set_size_request(16, 16)
         box.append(img)
 
         label = Gtk.Label(xalign=0.0)
@@ -264,6 +268,7 @@ class ProcessView(Gtk.Box):
         label: Gtk.Label = img.get_next_sibling()
 
         img.set_from_icon_name(obj.icon_name)
+        img.set_pixel_size(16)
         label.set_text(obj.name)
 
         if obj.cpu_percent >= self.high_cpu_threshold:

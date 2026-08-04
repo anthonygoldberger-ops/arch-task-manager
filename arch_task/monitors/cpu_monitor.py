@@ -61,39 +61,50 @@ class CpuMonitor:
 
     def _get_temperature(self) -> float:
         """Finds CPU package temperature in /sys/class/thermal or /sys/class/hwmon."""
-        # Check thermal zones
+        # 1. Check CPU thermal zones
         try:
-            for tz in glob.glob("/sys/class/thermal/thermal_zone*"):
+            for tz in sorted(glob.glob("/sys/class/thermal/thermal_zone*")):
                 try:
                     with open(f"{tz}/type", "r") as f:
                         ttype = f.read().strip().lower()
-                    if "x86_pkg_temp" in ttype or "cpu" in ttype or "acpitz" in ttype:
+                    if "x86_pkg_temp" in ttype or "cpu" in ttype or "acpitz" in ttype or "k10temp" in ttype:
                         with open(f"{tz}/temp", "r") as f:
-                            return float(f.read().strip()) / 1000.0
+                            val = float(f.read().strip()) / 1000.0
+                            if 0 < val < 130:
+                                return val
                 except Exception:
                     continue
         except Exception:
             pass
 
-        # Fallback to hwmon
+        # 2. Check hwmon CPU chip sensors (coretemp, k10temp, zenpower, cpu)
+        fallback_temp = 0.0
         try:
-            for hwmon in glob.glob("/sys/class/hwmon/hwmon*"):
+            for hwmon in sorted(glob.glob("/sys/class/hwmon/hwmon*")):
                 name_path = f"{hwmon}/name"
+                name = ""
                 try:
-                    name = ""
                     if os.path.exists(name_path):
                         with open(name_path, "r") as f:
                             name = f.read().strip().lower()
-                    if "coretemp" in name or "k10temp" in name or "zenpower" in name or "cpu" in name:
-                        for temp_input in glob.glob(f"{hwmon}/temp*_input"):
+
+                    for temp_input in sorted(glob.glob(f"{hwmon}/temp*_input")):
+                        try:
                             with open(temp_input, "r") as f:
-                                return float(f.read().strip()) / 1000.0
+                                val = float(f.read().strip()) / 1000.0
+                                if 10.0 < val < 130.0:
+                                    if "coretemp" in name or "k10temp" in name or "zenpower" in name or "cpu" in name:
+                                        return val
+                                    elif fallback_temp == 0.0:
+                                        fallback_temp = val
+                        except Exception:
+                            continue
                 except Exception:
                     continue
         except Exception:
             pass
 
-        return 0.0
+        return fallback_temp
 
     def _get_freq_mhz(self, core_id: int) -> float:
         """Reads current frequency for given core from sysfs."""
@@ -105,7 +116,6 @@ class CpuMonitor:
         except Exception:
             pass
 
-        # Fallback to cpuinfo
         try:
             with open("/proc/cpuinfo", "r") as f:
                 core_count = 0
@@ -149,7 +159,6 @@ class CpuMonitor:
                 cpu_label = parts[0]
                 values = [float(x) for x in parts[1:]]
 
-                # values: user, nice, system, idle, iowait, irq, softirq, steal
                 idle_time = values[3] + (values[4] if len(values) > 4 else 0.0)
                 total_time = sum(values)
 
@@ -171,7 +180,7 @@ class CpuMonitor:
                     stats.cores.append(CpuCoreStats(core_id=core_id, usage_percent=usage_pct, freq_mhz=freq))
 
             stats.num_cores = len(stats.cores)
-        except Exception as e:
+        except Exception:
             pass
 
         return stats
