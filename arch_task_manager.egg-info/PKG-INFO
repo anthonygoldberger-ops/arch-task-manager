@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: arch-task-manager
+Version: 1.0.0
+Summary: Native high-performance GTK4 system task manager for Arch Linux
+Author: Arch Linux Engineering
+Classifier: Environment :: X11 Applications :: GTK
+Classifier: Operating System :: POSIX :: Linux
+Classifier: Programming Language :: Python :: 3
+Classifier: Topic :: System :: Monitoring
+Dynamic: author
+Dynamic: classifier
+Dynamic: summary

@@ -1,0 +1,2 @@
+[console_scripts]
+arch-task = arch_task.main:main
