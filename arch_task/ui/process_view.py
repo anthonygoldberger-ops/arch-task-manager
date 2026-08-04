@@ -22,6 +22,84 @@ def format_bytes(bytes_val: float) -> str:
     else:
         return f"{bytes_val / (1024 * 1024 * 1024):.2f} GiB"
 
+# Cache resolved icon names for fast lookup
+_ICON_CACHE: Dict[str, str] = {}
+
+def get_process_icon_name(proc_name: str, cmdline: str = "") -> str:
+    """Resolves matching GTK system theme icon for a process name or command line."""
+    clean_name = proc_name.strip().lower()
+
+    # Strip tree prefixes if tree view is enabled
+    for prefix in ["└─ ", "  "]:
+        while clean_name.startswith(prefix):
+            clean_name = clean_name[len(prefix):].strip()
+
+    if clean_name in _ICON_CACHE:
+        return _ICON_CACHE[clean_name]
+
+    icon_theme = Gtk.IconTheme.get_for_display(Gdk.Display.get_default())
+
+    # 1. Try exact process name as icon
+    if icon_theme.has_icon(clean_name):
+        _ICON_CACHE[clean_name] = clean_name
+        return clean_name
+
+    # 2. Known process to icon mappings
+    known_mappings = {
+        "firefox": "firefox",
+        "chrome": "google-chrome",
+        "chromium": "chromium",
+        "code": "com.visualstudio.code",
+        "vlc": "vlc",
+        "gimp": "gimp",
+        "steam": "steam",
+        "discord": "discord",
+        "telegram-desktop": "telegram",
+        "spotify": "spotify",
+        "bash": "utilities-terminal-symbolic",
+        "zsh": "utilities-terminal-symbolic",
+        "fish": "utilities-terminal-symbolic",
+        "python": "python-symbolic",
+        "python3": "python-symbolic",
+        "git": "git-symbolic",
+        "systemd": "system-component-application-symbolic",
+        "dbus-daemon": "system-component-application-symbolic",
+        "polkitd": "dialog-password-symbolic",
+        "pipewire": "audio-speakers-symbolic",
+        "pulseaudio": "audio-speakers-symbolic",
+        "hyprland": "preferences-desktop-display-symbolic",
+        "gnome-shell": "gnome-symbolic",
+        "sway": "preferences-desktop-display-symbolic",
+        "waybar": "panel-symbolic",
+        "alacritty": "utilities-terminal-symbolic",
+        "kitty": "utilities-terminal-symbolic",
+        "foot": "utilities-terminal-symbolic",
+    }
+
+    for k, v in known_mappings.items():
+        if k in clean_name:
+            if icon_theme.has_icon(v):
+                _ICON_CACHE[clean_name] = v
+                return v
+
+    # 3. Search desktop applications list (AppInfo)
+    for app in Gio.AppInfo.get_all():
+        exec_str = app.get_executable() or ""
+        if exec_str and clean_name in exec_str.lower():
+            icon = app.get_icon()
+            if icon:
+                icon_str = icon.to_string()
+                _ICON_CACHE[clean_name] = icon_str
+                return icon_str
+
+    # Default Fallback Icons
+    fallback = "application-x-executable"
+    if clean_name.startswith("kworker") or clean_name.startswith("systemd") or clean_name.startswith("kernel"):
+        fallback = "system-run-symbolic"
+
+    _ICON_CACHE[clean_name] = fallback
+    return fallback
+
 class ProcessGObject(GObject.Object):
     """GObject wrapper for ProcessInfo to bind with Gtk.ColumnView / ListStore."""
     __gproperties__ = {}
@@ -43,9 +121,10 @@ class ProcessGObject(GObject.Object):
         self.threads = info.threads
         self.start_time_str = info.start_time_str
         self.cmdline = info.cmdline
+        self.icon_name = get_process_icon_name(info.name, info.cmdline)
 
 class ProcessView(Gtk.Box):
-    """Processes tab with Gtk.ColumnView table, sortable headers, filter, context menu, and tree view support."""
+    """Processes tab with Gtk.ColumnView table, sortable headers, filter, context menu, and process app icons."""
     def __init__(self, main_window: Gtk.Window):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.main_window = main_window
@@ -59,7 +138,7 @@ class ProcessView(Gtk.Box):
         self.set_margin_top(8)
         self.set_margin_bottom(8)
 
-        # 1. Top Controls Bar (Search + Tree Toggle + Highlighting Legend)
+        # 1. Top Controls Bar (Search + Tree Toggle)
         top_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         self.append(top_bar)
 
@@ -72,39 +151,32 @@ class ProcessView(Gtk.Box):
         self.tree_toggle.connect("toggled", self._on_tree_toggled)
         top_bar.append(self.tree_toggle)
 
-        # 2. Setup Data Model (ListStore + FilterListModel + SortListModel)
+        # 2. Setup Data Model
         self.store = Gio.ListStore.new(ProcessGObject)
         self.filter_model = Gtk.FilterListModel.new(self.store, None)
 
-        # Custom CustomFilter for search
         self.custom_filter = Gtk.CustomFilter.new(self._filter_func)
         self.filter_model.set_filter(self.custom_filter)
         self.search_entry.connect("search-changed", lambda e: self.custom_filter.changed(Gtk.FilterChange.DIFFERENT))
 
         self.sort_model = Gtk.SortListModel.new(self.filter_model, None)
-
-        # Selection Model (Multi Selection)
         self.selection_model = Gtk.MultiSelection.new(self.sort_model)
 
         # 3. Build ColumnView
         self.column_view = Gtk.ColumnView.new(self.selection_model)
         self.column_view.set_show_column_separators(True)
         self.column_view.set_show_row_separators(True)
-
-        # Bind sorting header clicks
         self.sort_model.set_sorter(self.column_view.get_sorter())
 
-        # Scrolled container
         scrolled = Gtk.ScrolledWindow(vexpand=True)
         scrolled.set_child(self.column_view)
         self.append(scrolled)
 
-        # Create Columns
         self._create_columns()
 
         # 4. Context Menu (Right Click)
         gesture = Gtk.GestureClick.new()
-        gesture.set_button(Gdk.BUTTON_SECONDARY) # Right click
+        gesture.set_button(Gdk.BUTTON_SECONDARY)
         gesture.connect("pressed", self._on_right_click)
         self.column_view.add_controller(gesture)
 
@@ -117,26 +189,29 @@ class ProcessView(Gtk.Box):
         return query in text
 
     def _create_columns(self):
-        # Column definitions: (title, getter_func, sorter_type)
         cols = [
-            ("PID", lambda p: str(p.pid), lambda p: p.pid),
-            ("Process Name", lambda p: p.name, lambda p: p.name.lower()),
-            ("User", lambda p: p.user, lambda p: p.user),
-            ("CPU %", lambda p: f"{p.cpu_percent:.1f}%", lambda p: p.cpu_percent),
-            ("RAM (RSS)", lambda p: format_bytes(p.rss_bytes), lambda p: p.rss_bytes),
-            ("Virtual RAM", lambda p: format_bytes(p.vsize_bytes), lambda p: p.vsize_bytes),
-            ("Disk Read", lambda p: f"{format_bytes(p.read_bytes_sec)}/s", lambda p: p.read_bytes_sec),
-            ("Disk Write", lambda p: f"{format_bytes(p.write_bytes_sec)}/s", lambda p: p.write_bytes_sec),
-            ("State", lambda p: p.state, lambda p: p.state),
-            ("Threads", lambda p: str(p.threads), lambda p: p.threads),
-            ("Nice", lambda p: str(p.nice), lambda p: p.nice),
-            ("Start Time", lambda p: p.start_time_str, lambda p: p.start_time_str),
+            ("PID", lambda p: str(p.pid), lambda p: p.pid, False),
+            ("Process Name", lambda p: p.name, lambda p: p.name.lower(), True), # Has icon!
+            ("User", lambda p: p.user, lambda p: p.user, False),
+            ("CPU %", lambda p: f"{p.cpu_percent:.1f}%", lambda p: p.cpu_percent, False),
+            ("RAM (RSS)", lambda p: format_bytes(p.rss_bytes), lambda p: p.rss_bytes, False),
+            ("Virtual RAM", lambda p: format_bytes(p.vsize_bytes), lambda p: p.vsize_bytes, False),
+            ("Disk Read", lambda p: f"{format_bytes(p.read_bytes_sec)}/s", lambda p: p.read_bytes_sec, False),
+            ("Disk Write", lambda p: f"{format_bytes(p.write_bytes_sec)}/s", lambda p: p.write_bytes_sec, False),
+            ("State", lambda p: p.state, lambda p: p.state, False),
+            ("Threads", lambda p: str(p.threads), lambda p: p.threads, False),
+            ("Nice", lambda p: str(p.nice), lambda p: p.nice, False),
+            ("Start Time", lambda p: p.start_time_str, lambda p: p.start_time_str, False),
         ]
 
-        for title, str_func, sort_key_func in cols:
+        for title, str_func, sort_key_func, has_icon in cols:
             factory = Gtk.SignalListItemFactory()
-            factory.connect("setup", self._on_factory_setup)
-            factory.connect("bind", lambda f, item, sf=str_func: self._on_factory_bind(item, sf))
+            if has_icon:
+                factory.connect("setup", self._on_icon_factory_setup)
+                factory.connect("bind", self._on_icon_factory_bind)
+            else:
+                factory.connect("setup", self._on_factory_setup)
+                factory.connect("bind", lambda f, item, sf=str_func: self._on_factory_bind(item, sf))
 
             sorter = Gtk.CustomSorter.new(lambda a, b, sk=sort_key_func: self._compare_items(a, b, sk))
             column = Gtk.ColumnViewColumn.new(title, factory)
@@ -145,12 +220,9 @@ class ProcessView(Gtk.Box):
             self.column_view.append_column(column)
 
     def _compare_items(self, a: ProcessGObject, b: ProcessGObject, sort_key_func) -> int:
-        ka = sort_key_func(a)
-        kb = sort_key_func(b)
-        if ka < kb:
-            return -1
-        elif ka > kb:
-            return 1
+        ka, kb = sort_key_func(a), sort_key_func(b)
+        if ka < kb: return -1
+        elif ka > kb: return 1
         return 0
 
     def _on_factory_setup(self, factory, item):
@@ -162,14 +234,42 @@ class ProcessView(Gtk.Box):
     def _on_factory_bind(self, item, str_func):
         obj: ProcessGObject = item.get_item()
         label: Gtk.Label = item.get_child()
-        txt = str_func(obj)
-        label.set_text(txt)
+        label.set_text(str_func(obj))
 
-        # Highlight high CPU / memory processes visually
         if obj.cpu_percent >= self.high_cpu_threshold:
-            label.add_css_class("error") # Red highlight accent
+            label.add_css_class("error")
         elif obj.rss_bytes >= self.high_mem_threshold:
-            label.add_css_class("warning") # Orange highlight accent
+            label.add_css_class("warning")
+        else:
+            label.remove_css_class("error")
+            label.remove_css_class("warning")
+
+    def _on_icon_factory_setup(self, factory, item):
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        box.set_margin_start(6)
+        box.set_margin_end(6)
+
+        img = Gtk.Image(pixel_size=16)
+        box.append(img)
+
+        label = Gtk.Label(xalign=0.0)
+        box.append(label)
+
+        item.set_child(box)
+
+    def _on_icon_factory_bind(self, factory, item):
+        obj: ProcessGObject = item.get_item()
+        box: Gtk.Box = item.get_child()
+        img: Gtk.Image = box.get_first_child()
+        label: Gtk.Label = img.get_next_sibling()
+
+        img.set_from_icon_name(obj.icon_name)
+        label.set_text(obj.name)
+
+        if obj.cpu_percent >= self.high_cpu_threshold:
+            label.add_css_class("error")
+        elif obj.rss_bytes >= self.high_mem_threshold:
+            label.add_css_class("warning")
         else:
             label.remove_css_class("error")
             label.remove_css_class("warning")
@@ -268,10 +368,8 @@ class ProcessView(Gtk.Box):
         dialog.present()
 
     def refresh_data(self):
-        """Fetches latest process list from monitor and updates ListStore."""
         procs = self.monitor.update()
 
-        # If Tree View is enabled, sort processes by PPID -> PID hierarchy
         if self.is_tree_view:
             tree_map: Dict[int, List[ProcessInfo]] = {}
             for p in procs:
@@ -282,7 +380,7 @@ class ProcessView(Gtk.Box):
                 for child in tree_map.get(ppid, []):
                     child.name = ("  " * indent) + ("└─ " if indent > 0 else "") + child.name
                     ordered.append(child)
-                    if child.pid != ppid: # avoid infinite loop
+                    if child.pid != ppid:
                         walk(child.pid, indent + 1)
             walk(0)
             procs = ordered

@@ -12,6 +12,7 @@ COLOR_CPU = [(0.208, 0.518, 0.894)] # GNOME Blue #3584e4
 COLOR_MEMORY = [(0.569, 0.255, 0.675)] # GNOME Purple #9141ac
 COLOR_DISK = [(0.180, 0.761, 0.494), (0.902, 0.380, 0.000)] # Read Green #2ec27e, Write Orange #e66100
 COLOR_NET = [(0.071, 0.596, 0.608), (0.878, 0.106, 0.141)] # Download Teal #12989b, Upload Pink/Red #e01b24
+COLOR_TEMP = [(0.953, 0.400, 0.149)] # Vibrant Thermal Orange/Red #f36626
 
 def format_graph_value(val: float, unit_suffix: str, auto_scale: bool) -> str:
     """Formats values for graph labels and tooltips."""
@@ -33,7 +34,7 @@ def format_graph_value(val: float, unit_suffix: str, auto_scale: bool) -> str:
 class RollingGraphWidget(Gtk.DrawingArea):
     """
     High-performance GTK4 Cairo DrawingArea rendering smooth anti-aliased Bezier vector graphs
-    with subtle gradient fills, theme awareness, smooth scroll animation, and interactive hover tooltips.
+    with subtle gradient fills, theme awareness, and interactive hover tooltips.
     """
     def __init__(
         self,
@@ -60,11 +61,6 @@ class RollingGraphWidget(Gtk.DrawingArea):
         self.mouse_y: Optional[float] = None
         self.is_hovering: bool = False
 
-        # Animation state for smooth sliding transition
-        self._anim_progress: float = 1.0 # 0.0 to 1.0 transition
-        self._last_tick_time: float = time.time()
-        self._tick_cb_id = None
-
         # Setup GTK drawing and mouse motion events
         self.set_draw_func(self._on_draw)
 
@@ -74,7 +70,7 @@ class RollingGraphWidget(Gtk.DrawingArea):
         self.add_controller(motion_ctrl)
 
     def add_point(self, value: float, series_index: int = 0, timestamp: Optional[float] = None):
-        """Appends a new data sample with timestamp and triggers smooth scroll transition."""
+        """Appends a new data sample with timestamp and updates drawing area immediately."""
         now = timestamp or time.time()
         while len(self.series_data) <= series_index:
             self.series_data.append(collections.deque(maxlen=self.max_points))
@@ -83,10 +79,6 @@ class RollingGraphWidget(Gtk.DrawingArea):
         self.series_data[series_index].append(value)
         self.series_timestamps[series_index].append(now)
 
-        # Trigger animated sliding transition
-        self._anim_progress = 0.0
-        self._last_tick_time = time.time()
-        self._ensure_anim_tick()
         self.queue_draw()
 
     def add_multi_points(self, values: List[float], timestamp: Optional[float] = None):
@@ -94,26 +86,6 @@ class RollingGraphWidget(Gtk.DrawingArea):
         now = timestamp or time.time()
         for idx, val in enumerate(values):
             self.add_point(val, idx, timestamp=now)
-
-    def _ensure_anim_tick(self):
-        if self._tick_cb_id is None:
-            self._tick_cb_id = self.add_tick_callback(self._on_anim_frame)
-
-    def _on_anim_frame(self, widget, frame_clock):
-        now = time.time()
-        dt = now - self._last_tick_time
-        self._last_tick_time = now
-
-        # Advance animation progress smoothly over ~0.25s
-        self._anim_progress += dt * 4.0
-        if self._anim_progress >= 1.0:
-            self._anim_progress = 1.0
-            self._tick_cb_id = None
-            self.queue_draw()
-            return False # Remove tick callback when animation finishes
-
-        self.queue_draw()
-        return True
 
     def _on_mouse_motion(self, controller, x, y):
         self.mouse_x = x
@@ -247,9 +219,7 @@ class RollingGraphWidget(Gtk.DrawingArea):
             cr.show_text(latest_str)
 
         # 5. Render Smooth Bezier Vector Lines & Fading Gradient Fills
-        # Smooth scrolling offset computation
         step_x = plot_w / max(1, self.max_points - 1)
-        anim_shift = (1.0 - self._anim_progress) * step_x
 
         hover_closest_idx = None
         hover_closest_dist = float('inf')
@@ -265,9 +235,7 @@ class RollingGraphWidget(Gtk.DrawingArea):
             num_pts = len(deque_data)
 
             for i, val in enumerate(deque_data):
-                # Apply sliding animation offset
-                x = margin_left + (i - (self.max_points - num_pts)) * step_x - anim_shift
-                # Clamp within plot boundaries
+                x = margin_left + (i - (self.max_points - num_pts)) * step_x
                 x = max(margin_left, min(margin_left + plot_w, x))
                 
                 clamped_val = max(0.0, min(max_val, val))

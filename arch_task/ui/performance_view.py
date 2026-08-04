@@ -4,7 +4,7 @@ gi.require_version('Adw', '1')
 from gi.repository import Gtk, Adw, GLib
 from typing import List, Dict
 
-from .graph_widget import RollingGraphWidget, COLOR_CPU, COLOR_MEMORY, COLOR_DISK, COLOR_NET
+from .graph_widget import RollingGraphWidget, COLOR_CPU, COLOR_MEMORY, COLOR_DISK, COLOR_NET, COLOR_TEMP
 from ..monitors.cpu_monitor import CpuMonitor, CpuSystemStats
 from ..monitors.memory_monitor import MemoryMonitor, MemoryStats
 from ..monitors.gpu_monitor import GpuMonitor, GpuStats
@@ -14,7 +14,7 @@ from ..monitors.power_monitor import PowerMonitor, BatteryStats, SensorGroup
 from .process_view import format_bytes
 
 class PerformanceView(Gtk.ScrolledWindow):
-    """Performance tab displaying live hardware statistics and rolling history vector graphs."""
+    """Performance tab displaying live hardware statistics, temperature graphs, and rolling history vector graphs."""
     def __init__(self, main_window: Gtk.Window):
         super().__init__(vexpand=True)
         self.main_window = main_window
@@ -34,7 +34,7 @@ class PerformanceView(Gtk.ScrolledWindow):
         main_box.set_margin_bottom(16)
         self.set_child(main_box)
 
-        # 1. CPU Section
+        # 1. CPU & Thermal Section
         cpu_clamp = Adw.Clamp(maximum_size=1000)
         main_box.append(cpu_clamp)
 
@@ -44,6 +44,11 @@ class PerformanceView(Gtk.ScrolledWindow):
         self.cpu_graph = RollingGraphWidget(max_points=60, colors=COLOR_CPU, title="CPU Total Usage (%)", unit_suffix="%")
         self.cpu_graph.set_content_height(140)
         cpu_group.add(self.cpu_graph)
+
+        # Temperature History Vector Graph
+        self.temp_graph = RollingGraphWidget(max_points=60, colors=COLOR_TEMP, title="CPU Package Temperature (°C)", unit_suffix=" °C")
+        self.temp_graph.set_content_height(140)
+        cpu_group.add(self.temp_graph)
 
         self.cpu_info_row = Adw.ActionRow(title="Model", subtitle="Loading...")
         cpu_group.add(self.cpu_info_row)
@@ -55,7 +60,6 @@ class PerformanceView(Gtk.ScrolledWindow):
         self.core_expander = Gtk.Expander(label="Per-Core CPU Usage Breakdown")
         cpu_group.add(self.core_expander)
 
-        self.core_grid = Gtk.GridView()
         self.core_box = Gtk.FlowBox(max_children_per_line=4, selection_mode=Gtk.SelectionMode.NONE)
         self.core_box.set_margin_start(8)
         self.core_box.set_margin_end(8)
@@ -157,9 +161,10 @@ class PerformanceView(Gtk.ScrolledWindow):
 
     def refresh_data(self):
         """Polls data monitors and updates graphs and UI labels."""
-        # 1. Update CPU
+        # 1. Update CPU & Temperature Graph
         cpu = self.cpu_mon.update()
         self.cpu_graph.add_point(cpu.total_usage_percent)
+        self.temp_graph.add_point(cpu.temperature_c)
         self.cpu_info_row.set_subtitle(f"{cpu.model_name} ({cpu.num_cores} Cores)")
 
         freq_str = f"Avg Freq: {cpu.cores[0].freq_mhz:.0f} MHz" if cpu.cores else ""
@@ -169,7 +174,6 @@ class PerformanceView(Gtk.ScrolledWindow):
 
         # Update per-core graphs dynamically
         if len(self.core_graphs) != len(cpu.cores):
-            # Rebuild core widgets
             child = self.core_box.get_first_child()
             while child:
                 next_c = child.get_next_sibling()
